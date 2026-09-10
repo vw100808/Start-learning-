@@ -1,0 +1,53 @@
+name: Validate Stylized 3D Demo
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  browser-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Extract and syntax-check module
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('index.html').read_text()
+          js = s.split('<script type="module">', 1)[1].split('</script>', 1)[0]
+          js = js.replace("import * as THREE from 'three';", "const THREE = {};", 1)
+          Path('/tmp/app.syntax.js').write_text(js)
+          PY
+          node --check /tmp/app.syntax.js
+      - name: Install browser test dependencies
+        run: npm install --no-save playwright@1.55.0
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Serve demo
+        run: python3 -m http.server 4173 --directory . > /tmp/server.log 2>&1 &
+      - name: Browser smoke test
+        run: node - <<'NODE'
+          const { chromium } = require('playwright');
+          (async () => {
+            const browser = await chromium.launch({
+              headless: true,
+              args: ['--use-gl=swiftshader', '--enable-webgl']
+            });
+            const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+            const errors = [];
+            page.on('pageerror', e => errors.push(String(e)));
+            page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+            await page.goto('http://127.0.0.1:4173/', { waitUntil: 'networkidle', timeout: 30000 });
+            await page.waitForTimeout(3000);
+            const canvas = await page.locator('canvas').count();
+            if (canvas !== 1) throw new Error(`Expected one canvas, got ${canvas}`);
+            if (errors.length) throw new Error(errors.join('\n'));
+            await page.screenshot({ path: '/tmp/stylized-ramp-village.png' });
+            await browser.close();
+          })();
+        NODE
