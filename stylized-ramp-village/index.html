@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Stylized Ramp Village</title>
+  <style>
+    :root { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; color-scheme: dark; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #cce0e5; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #hud { position: fixed; left: 18px; bottom: 18px; padding: 10px 12px; border: 1px solid rgba(255,255,255,.35); border-radius: 8px; background: rgba(35,48,51,.58); color: #f2eedb; font: 12px/1.45 ui-monospace, monospace; backdrop-filter: blur(4px); user-select: none; }
+    #dialogue { position: fixed; left: 50%; bottom: 7%; transform: translateX(-50%); width: min(620px, calc(100vw - 40px)); padding: 14px 18px; border-radius: 10px; background: rgba(39,49,51,.88); color: #f2eedb; border: 1px solid rgba(255,255,255,.25); display: none; font: 14px/1.55 ui-sans-serif, system-ui, sans-serif; }
+    #dialogue strong { display:block; margin-bottom: 5px; color:#f2eedb; }
+  </style>
+</head>
+<body>
+  <div id="hud">WASD move · Shift sprint · Space jump / interact</div>
+  <div id="dialogue"><strong>Old mailbox</strong><span id="dialogueText"></span></div>
+
+  <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    const PLAYER_EYE = 1.7;
+    const WALK_SPEED = 3.1;
+    const SPRINT_SPEED = 5.6;
+    const JUMP_SPEED = 5.2;
+    const GRAVITY = 13.5;
+    const WORLD_LIMIT = 14.5;
+
+    // One horizontal row per material. X = lighting coordinate, Y = material row.
+    const RAMPS = [
+      { bp: 0.35, shadow: '#2d4a3e', lit: '#8da857' }, // 0 Grass / Ground
+      { bp: 0.40, shadow: '#62707d', lit: '#f2eedb' }, // 1 Plaster Wall
+      { bp: 0.38, shadow: '#4d2d2a', lit: '#aa5c42' }, // 2 Roof Tile
+      { bp: 0.35, shadow: '#362b24', lit: '#806346' }, // 3 Wood / Timber
+      { bp: 0.32, shadow: '#32424c', lit: '#9db5b8' }, // 4 Stone / Slate
+      { bp: 0.42, shadow: '#31453a', lit: '#d8c58a' }  // 5 Accent / Brass
+    ];
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#cce0e5');
+    scene.fog = new THREE.Fog('#cce0e5', 28, 62);
+
+    const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100);
+    camera.position.set(11, 8, 13);
+    camera.lookAt(0, 1.6, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.NoToneMapping;
+    document.body.appendChild(renderer.domElement);
+
+    function createRampTexture(ramps) {
+      const width = 256;
+      const height = ramps.length;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d', { alpha: false });
+      ramps.forEach((r, row) => {
+        const split = Math.round(r.bp * width);
+        ctx.fillStyle = r.shadow;
+        ctx.fillRect(0, row, split, 1);
+        ctx.fillStyle = r.lit;
+        ctx.fillRect(split, row, width - split, 1);
+      });
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
+      texture.generateMipmaps = false;
+      texture.flipY = false;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      return { texture, totalRows: height };
+    }
+
+    const { texture: rampTexture, totalRows } = createRampTexture(RAMPS);
+
+    function makeRampMaterial(materialIndex, options = {}) {
+      const base = new THREE.MeshPhongMaterial({
+        color: 0xffffff,
+        shininess: 0,
+        flatShading: true,
+        side: options.side ?? THREE.FrontSide,
+        transparent: options.transparent ?? false,
+        opacity: options.opacity ?? 1,
+        depthWrite: options.depthWrite ?? true
+      });
+
+      base.onBeforeCompile = (shader) => {
+        shader.uniforms.uRampMap = { value: rampTexture };
+        shader.uniforms.uTotalRows = { value: totalRows };
+        shader.uniforms.uMatIndex = { value: materialIndex };
+        shader.uniforms.uSunDir = { value: new THREE.Vector3(-0.65, 0.78, 0.42).normalize() };
+
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', `#include <common>\n varying vec3 vRampWorldNormal;\n varying vec3 vRampWorldPos;`)
+          .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\n vRampWorldPos = worldPosition.xyz;`)
+          .replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>\n vRampWorldNormal = normalize(mat3(modelMatrix) * objectNormal);`);
+
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', `#include <common>\n uniform sampler2D uRampMap;\n uniform float uTotalRows;\n uniform float uMatIndex;\n uniform vec3 uSunDir;\n varying vec3 vRampWorldNormal;\n varying vec3 vRampWorldPos;\n float rampCoord(float diff, float shadowFactor) { return clamp(diff * shadowFactor, 0.0, 1.0); }`)
+          .replace('#include <output_fragment>', `
+              float diff = dot(normalize(vRampWorldNormal), normalize(uSunDir)) * 0.5 + 0.5;
+              float shadowFactor = getShadowMask();
+              shadowFactor = max(shadowFactor, 0.28);
+              float coord = rampCoord(diff, shadowFactor);
+              float row = (uMatIndex + 0.5) / uTotalRows;
+              vec3 rampColor = texture2D(uRampMap, vec2(coord, row)).rgb;
+              outgoingLight = rampColor;
+              #include <output_fragment>
+            `);
+      };
+      base.customProgramCacheKey = () => `ramp-${materialIndex}`;
+      return base;
+    }
+
+    const materials = {
+      grass: makeRampMaterial(0),
+      wall: makeRampMaterial(1),
+      roof: makeRampMaterial(2),
+      wood: makeRampMaterial(3),
+      stone: makeRampMaterial(4),
+      accent: makeRampMaterial(5)
+    };
+
+    function tagMaterial(geometry, index) {
+      geometry.userData.rampMaterialIndex = index;
+      return geometry;
+    }
+
+    function mesh(geometry, material, cast = true, receive = true) {
+      const m = new THREE.Mesh(geometry, material);
+      m.castShadow = cast;
+      m.receiveShadow = receive;
+      return m;
+    }
+
+    function jitterGeometry(geometry, amount = 0.012) {
+      const pos = geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const s = Math.sin(i * 12.9898) * 43758.5453;
+        const r = s - Math.floor(s);
+        if (r > 0.15) {
+          pos.setX(i, pos.getX(i) + (r - 0.5) * amount);
+          pos.setZ(i, pos.getZ(i) + (0.5 - r) * amount);
+        }
+      }
+      pos.needsUpdate = true;
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+
+    function addBox(group, size, position, material, opts = {}) {
+      const g = jitterGeometry(new THREE.BoxGeometry(...size), opts.jitter ?? 0.01);
+      tagMaterial(g, opts.materialIndex ?? 0);
+      const m = mesh(g, material, opts.cast ?? true, opts.receive ?? true);
+      m.position.set(...position);
+      m.rotation.y = opts.rotationY ?? 0;
+      group.add(m);
+      return m;
+    }
+
+    function addCylinder(group, radius, height, position, material, opts = {}) {
+      const g = jitterGeometry(new THREE.CylinderGeometry(radius, radius * 1.04, height, opts.segments ?? 8), opts.jitter ?? 0.015);
+      tagMaterial(g, opts.materialIndex ?? 0);
+      const m = mesh(g, material, true, true);
+      m.position.set(...position);
+      m.rotation.z = THREE.MathUtils.degToRad(opts.tilt ?? 0);
+      m.rotation.x = THREE.MathUtils.degToRad(opts.tiltX ?? 0);
+      group.add(m);
+      return m;
+    }
+
+    // Ground
+    const groundGeo = new THREE.PlaneGeometry(40, 40, 16, 16);
+    tagMaterial(groundGeo, 0);
+    groundGeo.rotateX(-Math.PI / 2);
+    scene.add(mesh(groundGeo, materials.grass, false, true));
+
+    // Geometry-only ground variation.
+    for (let i = 0; i < 22; i++) {
+      const a = i * 2.399;
+      const r = 5.5 + (i % 4) * 1.4;
+      const patchGroup = new THREE.Group();
+      addBox(patchGroup, [0.35 + (i % 3) * .12, .025, .25 + (i % 2) * .1], [Math.cos(a) * r, .012, Math.sin(a) * r], materials.wood, { jitter: .002, cast:false, receive:true, materialIndex:3 });
+      scene.add(patchGroup);
+    }
+
+    // House: multiple volumes.
+    const house = new THREE.Group();
+    house.position.set(0, 0, -1.4);
+    scene.add(house);
+    addBox(house, [3.8, 3.0, 3.2], [0, 1.5, 0], materials.wall, { materialIndex:1, jitter:.018 });
+    addBox(house, [1.7, 1.8, 2.1], [2.45, .9, .55], materials.wall, { materialIndex:1, jitter:.018, rotationY: -.045 });
+    addBox(house, [1.2, 2.1, 1.0], [-2.05, 1.05, -.65], materials.stone, { materialIndex:4, jitter:.02, rotationY: .035 });
+
+    function roofHalf(sign = 1) {
+      const width = 4.9, depth = 4.2, eaveY = 3.05, ridgeY = 4.28;
+      const hw = width / 2;
+      const z0 = -depth / 2, z1 = depth / 2;
+      const sag = 0.095;
+      const vertices = new Float32Array([
+        0, ridgeY - sag, z0, sign * hw, eaveY, z0,
+        sign * hw, eaveY, z1, 0, ridgeY - sag, z1
+      ]);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+      g.setIndex([0,1,2, 0,2,3]);
+      g.computeVertexNormals();
+      tagMaterial(g, 2);
+      return mesh(g, materials.roof, true, true);
+    }
+    house.add(roofHalf(-1), roofHalf(1));
+
+    for (let i = -2; i <= 2; i++) {
+      addBox(house, [0.08, .10, 4.25], [i * .78, 3.12 + Math.abs(i)*.19, 0], materials.wood, { materialIndex:3, jitter:.004 });
+    }
+
+    const chimney = new THREE.Group();
+    chimney.position.set(-1.15, 4.15, -.55);
+    chimney.rotation.z = THREE.MathUtils.degToRad(8);
+    addBox(chimney, [.55, 1.35, .55], [0, .65, 0], materials.stone, { materialIndex:4, jitter:.02 });
+    addBox(chimney, [.68, .16, .68], [0, 1.36, 0], materials.accent, { materialIndex:5, jitter:.012 });
+    house.add(chimney);
+
+    addBox(house, [.18, 2.65, .18], [-1.55, 1.52, 1.64], materials.wood, { materialIndex:3, jitter:.008, rotationY:.015 });
+    addBox(house, [.18, 2.65, .18], [1.55, 1.52, 1.64], materials.wood, { materialIndex:3, jitter:.008, rotationY:-.02 });
+    addBox(house, [3.25, .18, .18], [0, 2.2, 1.64], materials.wood, { materialIndex:3, jitter:.008, rotationY:.01 });
+    addBox(house, [.9, 1.7, .08], [0, .86, 1.64], materials.wood, { materialIndex:3, jitter:.005 });
+    for (const x of [-1.15, 1.15]) {
+      addBox(house, [.75, .78, .07], [x, 1.72, 1.65], materials.stone, { materialIndex:4, jitter:.006 });
+      addBox(house, [.06, .78, .09], [x, 1.72, 1.61], materials.wood, { materialIndex:3, jitter:.004 });
+      addBox(house, [.75, .06, .09], [x, 1.72, 1.61], materials.wood, { materialIndex:3, jitter:.004 });
+    }
+
+    // Props.
+    const props = new THREE.Group();
+    scene.add(props);
+
+    function addTree(x, z, scale = 1) {
+      const tree = new THREE.Group();
+      tree.position.set(x, 0, z);
+      tree.scale.setScalar(scale);
+      addCylinder(tree, .22, 2.3, [0, 1.15, 0], materials.wood, { materialIndex:3, tilt: -5, segments:7 });
+      const crown = jitterGeometry(new THREE.IcosahedronGeometry(1.25, 1), .035);
+      tagMaterial(crown, 0);
+      const crownMesh = mesh(crown, materials.grass, true, true);
+      crownMesh.position.set(.05, 2.65, 0);
+      tree.add(crownMesh);
+      props.add(tree);
+    }
+    addTree(-6.4, -2.8, 1.15);
+    addTree(6.6, -4.2, .9);
+    addTree(-5.7, 5.8, .8);
+
+    for (let i = -5; i <= 5; i++) {
+      const z = 3.9 + Math.sin(i * 1.7) * .08;
+      addCylinder(props, .08, 1.2 + (i % 2) * .08, [i * .65, .6, z], materials.wood, { materialIndex:3, tilt: (i % 3 - 1) * 3, segments:6, jitter:.01 });
+    }
+    addBox(props, [7.1, .11, .10], [0, .85, 3.9], materials.wood, { materialIndex:3, jitter:.008, rotationY:.01 });
+    addBox(props, [7.1, .11, .10], [0, .35, 3.9], materials.wood, { materialIndex:3, jitter:.008, rotationY:-.012 });
+
+    for (let i = 0; i < 7; i++) {
+      const g = jitterGeometry(new THREE.BoxGeometry(1.15, .10, .72), .025);
+      tagMaterial(g, 4);
+      const p = mesh(g, materials.stone, false, true);
+      p.position.set(0, .05, 2.9 + i * .85);
+      p.rotation.y = (i % 2 ? .08 : -.06);
+      scene.add(p);
+    }
+
+    const mailbox = new THREE.Group();
+    mailbox.position.set(3.4, 0, 2.25);
+    addCylinder(mailbox, .06, 1.25, [0, .625, 0], materials.wood, { materialIndex:3, segments:6 });
+    addBox(mailbox, [.65, .42, .36], [0, 1.28, 0], materials.accent, { materialIndex:5, jitter:.012 });
+    addBox(mailbox, [.72, .07, .42], [0, 1.22, .22], materials.wood, { materialIndex:3, jitter:.006 });
+    props.add(mailbox);
+
+    // One directional sun; low ambient fill only prevents pure-black interiors.
+    const sun = new THREE.DirectionalLight(0xffffff, 1.65);
+    sun.position.set(-10, 13, 8);
+    sun.target.position.set(0, 1, 0);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.near = 0.5;
+    sun.shadow.camera.far = 45;
+    sun.shadow.camera.left = -18;
+    sun.shadow.camera.right = 18;
+    sun.shadow.camera.top = 18;
+    sun.shadow.camera.bottom = -18;
+    sun.shadow.bias = -0.00025;
+    scene.add(sun, sun.target);
+    scene.add(new THREE.HemisphereLight(0xf2eedb, 0x2d4a3e, 0.18));
+
+    // Player / camera.
+    const player = new THREE.Group();
+    player.position.set(0, 0, 6.5);
+    scene.add(player);
+    addCylinder(player, .32, 1.35, [0, .675, 0], materials.wood, { materialIndex:3, segments:7, jitter:.012 });
+    const head = jitterGeometry(new THREE.IcosahedronGeometry(.38, 1), .012);
+    tagMaterial(head, 1);
+    const headMesh = mesh(head, materials.wall, true, true);
+    headMesh.position.y = 1.52;
+    player.add(headMesh);
+
+    const keys = new Set();
+    addEventListener('keydown', (e) => {
+      keys.add(e.code);
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (!interactMailbox() && player.userData.grounded) player.userData.velocityY = JUMP_SPEED;
+      }
+    });
+    addEventListener('keyup', (e) => keys.delete(e.code));
+    player.userData.velocityY = 0;
+    player.userData.grounded = true;
+
+    function interactMailbox() {
+      const p = new THREE.Vector3(player.position.x, 0, player.position.z);
+      const m = new THREE.Vector3(mailbox.position.x, 0, mailbox.position.z);
+      if (p.distanceTo(m) < 2.4) {
+        const el = document.getElementById('dialogue');
+        const text = document.getElementById('dialogueText');
+        text.textContent = 'The paint is chipped, but the brass latch still works. Someone still checks this road.';
+        el.style.display = el.style.display === 'block' ? 'none' : 'block';
+        return true;
+      }
+      return false;
+    }
+
+    const clock = new THREE.Clock();
+    const tmpForward = new THREE.Vector3();
+    const tmpRight = new THREE.Vector3();
+    const tmpMove = new THREE.Vector3();
+    const moveVector = new THREE.Vector3();
+    const worldUp = new THREE.Vector3(0, 1, 0);
+    const desiredCamera = new THREE.Vector3();
+    const lookTarget = new THREE.Vector3();
+
+    function updatePlayer(dt) {
+      tmpMove.set(0, 0, 0);
+      if (keys.has('KeyW')) tmpMove.z -= 1;
+      if (keys.has('KeyS')) tmpMove.z += 1;
+      if (keys.has('KeyA')) tmpMove.x -= 1;
+      if (keys.has('KeyD')) tmpMove.x += 1;
+      if (tmpMove.lengthSq() > 0) tmpMove.normalize();
+
+      camera.getWorldDirection(tmpForward);
+      tmpForward.y = 0;
+      tmpForward.normalize();
+      tmpRight.crossVectors(tmpForward, worldUp).normalize();
+      moveVector.set(0, 0, 0);
+      moveVector.addScaledVector(tmpForward, -tmpMove.z);
+      moveVector.addScaledVector(tmpRight, tmpMove.x);
+      if (moveVector.lengthSq() > 0) moveVector.normalize();
+
+      const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? SPRINT_SPEED : WALK_SPEED;
+      player.position.addScaledVector(moveVector, speed * dt);
+      player.position.x = THREE.MathUtils.clamp(player.position.x, -WORLD_LIMIT, WORLD_LIMIT);
+      player.position.z = THREE.MathUtils.clamp(player.position.z, -WORLD_LIMIT, WORLD_LIMIT);
+
+      player.userData.velocityY -= GRAVITY * dt;
+      player.position.y += player.userData.velocityY * dt;
+      if (player.position.y <= 0) {
+        player.position.y = 0;
+        player.userData.velocityY = 0;
+        player.userData.grounded = true;
+      } else {
+        player.userData.grounded = false;
+      }
+
+      if (moveVector.lengthSq() > 0) player.rotation.y = Math.atan2(moveVector.x, moveVector.z);
+
+      const yaw = player.rotation.y;
+      desiredCamera.set(
+        player.position.x - Math.sin(yaw) * 10.8,
+        player.position.y + PLAYER_EYE + 5.1,
+        player.position.z - Math.cos(yaw) * 10.8
+      );
+      camera.position.lerp(desiredCamera, 1 - Math.pow(.0008, dt));
+      lookTarget.set(player.position.x, player.position.y + 1.25, player.position.z);
+      camera.lookAt(lookTarget);
+    }
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.033);
+      updatePlayer(dt);
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
