@@ -1,23 +1,36 @@
-# Stylized Ramp Village
+# Melbourne Open City — Prototype
 
-A single-file vanilla Three.js/WebGL stylized 3D scene based on the supplied art-direction contract.
+A single-file vanilla Three.js/WebGL open-world foundation. The original stylized ramp-shading contract is retained, but the scene direction has changed from a small village demo to a fictionalized, explorable Melbourne city core.
 
-## Constraints implemented
+## Current build
 
-- No external PNG/JPG textures. The only texture is a procedural Canvas LUT generated at runtime.
-- One LUT row per material; lighting coordinate is `dot(N, L) * 0.5 + 0.5`.
-- Shadow attenuation modifies the lookup coordinate and is clamped so deep shadows remain chromatic rather than black.
-- Low-poly geometry with deterministic vertex jitter, multi-volume buildings, roof sag, and deliberately tilted chimney.
-- One directional sun with shadow mapping; no bloom, vignette, or depth-of-field.
-- Third-person follow camera, WASD movement, Shift sprint, Space jump/interact.
-- No asset pipeline or build step is required.
+- Large navigable city canvas rather than a single showcase scene.
+- Procedural CBD-style street grid, Yarra waterfront corridor, tram tracks and moving tram.
+- Stylised landmark anchors inspired by recognisable Melbourne locations: Flinders Street Station, Federation Square, Southbank skyline, MCG and Royal Exhibition Building.
+- Procedural multi-volume buildings with low-poly silhouettes; no external PNG/JPG textures.
+- Runtime-generated Canvas LUT: one horizontal row per material, with lighting sampled by `dot(N, L) * 0.5 + 0.5`.
+- Shadows attenuate the LUT coordinate rather than directly darkening the sampled colour; deep shadows stay chromatic.
+- Third-person exploration camera, WASD movement, Shift sprint, Space jump/interact and mouse camera control.
+- Simple minimap, district labels, landmark interactions, first exploration objective and moving pedestrian/tram cues.
+- No bloom, vignette, depth-of-field or other post-processing.
 
-## Run
+## Long-term target
 
-Open `index.html` through a local HTTP server. The browser needs network access to load the pinned Three.js ES module from unpkg.
+The target is an original open-world exploration game with the broad gameplay feeling of a modern action-adventure sandbox: continuous traversal, discoverable locations, NPCs, quests, interiors, activities, fast travel and a growing city simulation. It is **not** intended to copy another game's characters, assets, story, UI or proprietary visual identity.
 
-```bash
-python3 -m http.server 8000
-```
+Planned progression:
 
-Then open `http://localhost:8000/`.
+1. **World structure:** replace the current fixed prototype with district modules and distance-based streaming.
+2. **Traversal:** collision, slopes, stairs, jumping, sprint stamina, vehicles and tram travel.
+3. **City simulation:** pedestrians, traffic, weather, day/night, shops, stations and public events.
+4. **Exploration:** map markers, collectibles, hidden alleys, viewpoints, environmental storytelling and interiors.
+5. **Game systems:** quests, dialogue, inventory, economy, skills and save/load.
+6. **Expansion:** Docklands, Carlton/Fitzroy, Southbank, Richmond, parks and additional waterfront areas.
+
+## Run in browser
+
+The repository root now contains a small GitHub Pages entry point that redirects to the game folder. After GitHub Pages is enabled for `main` / root, the intended public URL is:
+
+`https://vw100808.github.io/Start-learning-/`
+
+The page still needs network access to load the pinned Three.js ES module from unpkg.
