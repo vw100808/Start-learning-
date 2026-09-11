@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Melbourne Open City v36</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#87b7c9;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+.ui{position:fixed;z-index:5;color:#fff4df;background:rgba(22,52,57,.90);border:1px solid rgba(235,241,229,.35);border-radius:18px;box-shadow:0 8px 22px rgba(0,0,0,.22);padding:11px 15px;pointer-events:none}
+#title{left:14px;top:12px;font-size:14px}#title b{font-size:21px}#status{right:12px;top:12px;font-size:13px}#quest{left:14px;top:88px;max-width:520px;line-height:1.45;font-size:14px}#quest b{color:#f1d079;font-size:16px}#error{display:none;left:12px;right:12px;top:210px;background:#7d2930}
+#hint{right:12px;bottom:16px;font-size:12px}
+#joy{position:fixed;z-index:6;left:28px;bottom:30px;width:138px;height:138px;border:2px solid rgba(235,241,229,.55);border-radius:50%;background:rgba(35,73,78,.28);box-shadow:0 7px 20px rgba(0,0,0,.18);display:none;touch-action:none}
+#knob{position:absolute;width:54px;height:54px;left:42px;top:42px;border-radius:50%;background:#f2ead8;box-shadow:0 5px 14px rgba(0,0,0,.24)}
+#run{position:fixed;z-index:6;right:30px;bottom:36px;width:82px;height:82px;border-radius:50%;border:1px solid rgba(235,241,229,.4);background:#17383d;color:#fff4df;font-weight:700;font-size:18px;display:none}
+@media(max-width:700px){#joy,#run{display:block}#title{left:10px;top:10px;padding:9px 12px}#title b{font-size:17px}#status{right:9px;top:10px}#quest{left:10px;right:10px;top:80px;font-size:13px}#hint{right:10px;bottom:12px}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title" class="ui"><b>Melbourne Open City · v36</b><br>Southbank · Yarra · Flinders · CBD</div>
+<div id="status" class="ui">BOOT</div>
+<div id="quest" class="ui"><b>A NEW BEGINNING</b><br>Yarra 河滨 → Princes Bridge → Flinders Street / Federation Square。v36 从最小稳定 3D 渲染底座重新建立。</div>
+<div id="error" class="ui"></div>
+<div id="hint" class="ui">左摇杆移动 · 右侧拖动镜头 · RUN 冲刺</div>
+<div id="joy"><div id="knob"></div></div><button id="run">RUN</button>
+<script>
+(function(){'use strict';
+const canvas=document.getElementById('c'),status=document.getElementById('status'),error=document.getElementById('error');
+let gl;
+try{gl=canvas.getContext('webgl',{alpha:false,antialias:false,depth:true,preserveDrawingBuffer:false})||canvas.getContext('experimental-webgl');}catch(e){gl=null;}
+if(!gl){status.textContent='WEBGL FAIL';error.style.display='block';error.textContent='当前浏览器没有可用 WebGL';return;}
+function fail(e){console.error(e);status.textContent='RUNTIME ERROR';error.style.display='block';error.textContent=String(e&&e.message||e);}
+try{
+const VS='attribute vec3 aP;attribute vec3 aN;attribute vec3 aC;uniform mat4 uVP;varying vec3 vN;varying vec3 vC;varying float vD;void main(){vec4 w=vec4(aP,1.0);gl_Position=uVP*w;vN=aN;vC=aC;vD=gl_Position.w;}';
+const FS='precision mediump float;varying vec3 vN;varying vec3 vC;varying float vD;void main(){vec3 L=normalize(vec3(-0.45,0.82,0.38));float d=max(dot(normalize(vN),L),0.0);float light=0.58+0.42*d;float fog=clamp((vD-90.0)/520.0,0.0,0.48);vec3 c=vC*light;c=mix(c,vec3(0.48,0.67,0.72),fog);gl_FragColor=vec4(c,1.0);}';
+function shader(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s)||'shader compile');return s;}
+const program=gl.createProgram();gl.attachShader(program,shader(gl.VERTEX_SHADER,VS));gl.attachShader(program,shader(gl.FRAGMENT_SHADER,FS));gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program)||'program link');gl.useProgram(program);
+const aP=gl.getAttribLocation(program,'aP'),aN=gl.getAttribLocation(program,'aN'),aC=gl.getAttribLocation(program,'aC'),uVP=gl.getUniformLocation(program,'uVP');
+const pos=[],nor=[],col=[];
+const mats=[[0.29,0.37,0.34],[0.55,0.43,0.34],[0.70,0.55,0.42],[0.80,0.69,0.54],[0.72,0.77,0.72],[0.26,0.46,0.49],[0.25,0.31,0.30],[0.43,0.34,0.29],[0.74,0.34,0.25],[0.16,0.25,0.24],[0.56,0.58,0.53]];
+function V(p,n,m){pos.push(p[0],p[1],p[2]);nor.push(n[0],n[1],n[2]);const c=mats[m%mats.length];col.push(c[0],c[1],c[2]);}
+function face(a,b,c,d,n,m){V(a,n,m);V(b,n,m);V(c,n,m);V(a,n,m);V(c,n,m);V(d,n,m);}
+function box(x,y,z,w,h,d,m){const X=w/2,Z=d/2;const A=[x-X,y,z-Z],B=[x+X,y,z-Z],C=[x+X,y+h,z-Z],D=[x-X,y+h,z-Z],E=[x-X,y,z+Z],F=[x+X,y,z+Z],G=[x+X,y+h,z+Z],H=[x-X,y+h,z+Z];face(A,B,C,D,[0,0,-1],m);face(F,E,H,G,[0,0,1],m);face(E,A,D,H,[-1,0,0],m);face(B,F,G,C,[1,0,0],m);face(D,C,G,H,[0,1,0],m);face(E,F,B,A,[0,-1,0],m);}
+function roof(x,y,z,w,h,d,m){const X=w/2,Z=d/2;const A=[x-X,y,z-Z],B=[x+X,y,z-Z],C=[x+X,y,z+Z],D=[x-X,y,z+Z],T=[x,y+h,z];face(A,B,T,T,[0.1,0.85,-0.35],m);face(B,C,T,T,[0.35,0.85,0.1],m);face(C,D,T,T,[-0.1,0.85,0.35],m);face(D,A,T,T,[-0.35,0.85,-0.1],m);}
+function cyl(x,y,z,r,h,m,seg){seg=seg||8;for(let i=0;i<seg;i++){const a=i*Math.PI*2/seg,b=(i+1)*Math.PI*2/seg;const A=[x+Math.cos(a)*r,y,z+Math.sin(a)*r],B=[x+Math.cos(b)*r,y,z+Math.sin(b)*r],C=[B[0],y+h,B[2]],D=[A[0],y+h,A[2]];face(A,B,C,D,[Math.cos((a+b)/2),0,Math.sin((a+b)/2)],m);}}
+function windowStrip(x,y,z,w,h,count,m){for(let i=0;i<count;i++){const xx=x-w/2+(i+0.5)*w/count;box(xx,y,z,w/count*0.46,h,0.28,m);}}
+function heritage(x,z,w,h,m){box(x,0,z,w,4,22,m);box(x,4,z,w,h-7,20,m);windowStrip(x,8,z-10.25,w-4,h-11,Math.max(3,Math.floor(w/5)),5);box(x,h-3,z,w+1.4,1.1,22,3);box(x,h-1.9,z,w+0.5,0.7,21,2);}
+function modern(x,z,w,h){box(x,0,z,w,h,22,4);for(let y=7;y<h-3;y+=4)windowStrip(x,y,z-11.15,w-4,2.2,Math.max(3,Math.floor(w/5)),5);box(x,h-1.3,z,w+1,1,22,6);}
+function tower(x,z,w,h,m){box(x,0,z,w,h,26,m);for(let y=8;y<h-5;y+=5)windowStrip(x,y,z-13.1,w-3,3,Math.max(3,Math.floor(w/5)),5);roof(x,h,z,w+2,2,28,3);}
+function tree(x,z,s){s=s||1;cyl(x,0,z,.22*s,3.6*s,9,8);cyl(x,3.0*s,z,.85*s,1.8*s,10,8);cyl(x-.55*s,3.5*s,z,.62*s,1.5*s,10,8);cyl(x+.55*s,3.5*s,z,.62*s,1.5*s,10,8);}
+function lamp(x,z){cyl(x,0,z,.09,4.7,7,7);cyl(x+.28,4.45,z,.30,.12,9,8);}
+function car(x,z,m){box(x,.35,z,3.4,1.0,7,m||7);box(x,1.35,z,2.5,.65,3.5,5);}
+function tram(x,z){box(x,.45,z,3.1,3.0,15,5);for(let i=-5;i<=5;i+=2.5)box(x,1.0,z+i,2.55,1.2,.12,6);box(x,3.45,z,2.8,.12,14,9);}
+function station(){box(-20,0,-160,210,16,28,3);box(-20,16,-160,210,5,25,2);for(let x=-112;x<=72;x+=10){box(x,0,-174,7,13,1.2,4);box(x,4,-174,4.5,6,.2,5);}box(-20,21,-160,46,5,27,4);cyl(-20,26,-160,18,9,4,12);for(const x of [-115,75]){box(x,16,-160,15,36,23,2);cyl(x,52,-160,4.5,5,4,9);}}
+function federation(){for(let i=-2;i<=2;i++){const x=i*23,z=-126+Math.abs(i)*5;roof(x,0,z,34,17+Math.abs(i)*3,25,4);}}
+function cathedral(){box(72,0,-134,32,18,44,2);for(const x of [61,83]){box(x,18,-134,9,39,13,2);roof(x,57,-134,10,13,13,3);}}
+function ngv(){box(-104,0,-94,70,20,38,6);box(-104,20,-94,66,3,34,4);box(-104,0,-73,60,11,1,5);for(let x=-130;x<=-78;x+=8)box(x,0,-72,3,9,.4,5);}
+function arts(){box(132,0,-106,42,21,28,2);roof(132,21,-106,32,5,23,4);box(132,26,-106,9,95,9,5);cyl(132,121,-106,2,16,4,8);}
+function eureka(){tower(42,-210,48,238,5);box(42,202,-210,40,32,42,5);}
+function bridge(){box(0,2,-38,170,2.6,12,3);for(let x=-72;x<=72;x+=24){box(x,-1,-38,3,3,12,2);cyl(x,4,-38,.16,2,9,7);}}
+function street(){box(0,-1,-22,440,1,86,6);box(0,-.3,20,440,.5,3,3);box(0,-.3,-64,440,.5,3,3);for(let z=-70;z>=-250;z-=27)box(0,.02,z,440,.15,12,3);for(let x=-205;x<=205;x+=18)box(x,.05,-22,13,.12,70,5);}
+function world(){street();
+for(let z=-68;z>=-238;z-=28){heritage(-128,z,48,30+(Math.abs(z)%50),1);modern(-70,z,46,48+(Math.abs(z)%70));heritage(-8,z,48,36+(Math.abs(z)%60),2);modern(54,z,48,60+(Math.abs(z)%80));heritage(116,z,48,42+(Math.abs(z)%45),1);tower(166,z,34,72+(Math.abs(z)%80),4);}
+for(let x=-190;x<=190;x+=24){tree(x,-7,1.15);lamp(x+8,-13);}bridge();station();federation();cathedral();ngv();arts();eureka();
+for(let z=-70;z>=-230;z-=43){car(-8,z,7);car(18,z+14,8);tram(78,z+17);}
+// Yarra foreground
+box(0,-.4,30,440,.4,70,5);for(let x=-190;x<=190;x+=24)box(x,0,8,16,.12,2,6);
+}
+world();
+const vb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vb);const inter=new Float32Array(pos.length/3*9);for(let i=0,j=0;i<pos.length;i+=3,j+=9){inter[j]=pos[i];inter[j+1]=pos[i+1];inter[j+2]=pos[i+2];inter[j+3]=nor[i];inter[j+4]=nor[i+1];inter[j+5]=nor[i+2];inter[j+6]=col[i];inter[j+7]=col[i+1];inter[j+8]=col[i+2];}gl.bufferData(gl.ARRAY_BUFFER,inter,gl.STATIC_DRAW);gl.enableVertexAttribArray(aP);gl.vertexAttribPointer(aP,3,gl.FLOAT,false,36,0);gl.enableVertexAttribArray(aN);gl.vertexAttribPointer(aN,3,gl.FLOAT,false,36,12);gl.enableVertexAttribArray(aC);gl.vertexAttribPointer(aC,3,gl.FLOAT,false,36,24);
+function sub(a,b){return[a[0]-b[0],a[1]-b[1],a[2]-b[2]]}function dot(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]}function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}function norm(a){const l=Math.hypot(a[0],a[1],a[2])||1;return[a[0]/l,a[1]/l,a[2]/l]}
+function look(eye,target){const f=norm(sub(target,eye)),s=norm(cross(f,[0,1,0])),u=cross(s,f);return new Float32Array([s[0],u[0],-f[0],0,s[1],u[1],-f[1],0,s[2],u[2],-f[2],0,-dot(s,eye),-dot(u,eye),dot(f,eye),1]);}
+function perspective(fov,aspect,near,far){const f=1/Math.tan(fov/2),nf=1/(near-far);return new Float32Array([f/aspect,0,0,0,0,f,0,0,0,0,(far+near)*nf,-1,0,0,2*far*near*nf,0]);}
+function mul(a,b){const o=new Float32Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++)o[c*4+r]=a[r]*b[c*4]+a[r+4]*b[c*4+1]+a[r+8]*b[c*4+2]+a[r+12]*b[c*4+3];return o;}
+let yaw=0,pitch=.16,dist=22;let target=[0,7,-65];let moving=false,joyId=null,camId=null,jx=0,jy=0,lastX=0,lastY=0;const joy=document.getElementById('joy'),knob=document.getElementById('knob');
+function resize(){const d=Math.min(window.devicePixelRatio||1,1.35),w=Math.max(1,Math.floor(innerWidth*d)),h=Math.max(1,Math.floor(innerHeight*d));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;gl.viewport(0,0,w,h);}}
+function camera(){const cp=Math.cos(pitch),sp=Math.sin(pitch);const eye=[target[0]+Math.sin(yaw)*cp*dist,target[1]+sp*dist,target[2]+Math.cos(yaw)*cp*dist];return mul(perspective(1.02,canvas.width/canvas.height,.1,900),look(eye,target));}
+function render(t){resize();gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LESS);gl.disable(gl.CULL_FACE);gl.clearColor(.36,.63,.72,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(program);gl.uniformMatrix4fv(uVP,false,camera());gl.drawArrays(gl.TRIANGLES,0,pos.length/3);status.textContent='RUNNING · '+Math.round(pos.length/3)+' tris';requestAnimationFrame(render);}
+function move(){const f=-jy,a=jx,sprint=document.getElementById('run').classList.contains('on')?1.9:1;target[0]+=(-Math.sin(yaw)*f+Math.cos(yaw)*a)*sprint;target[2]+=(-Math.cos(yaw)*f-Math.sin(yaw)*a)*sprint;}
+joy.addEventListener('pointerdown',e=>{joyId=e.pointerId;joy.setPointerCapture(joyId);moving=true;joyMove(e)});joy.addEventListener('pointermove',e=>{if(e.pointerId===joyId)joyMove(e)});joy.addEventListener('pointerup',e=>{if(e.pointerId===joyId){joyId=null;jx=jy=0;knob.style.transform='translate(0,0)'}});function joyMove(e){const r=joy.getBoundingClientRect(),dx=e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2),mx=r.width*.34,len=Math.hypot(dx,dy)||1,k=Math.min(1,mx/len);jx=dx/mx*k;jy=dy/mx*k;knob.style.transform='translate('+dx*k+'px,'+dy*k+'px)';}
+canvas.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse'){camId=e.pointerId;lastX=e.clientX;lastY=e.clientY;canvas.setPointerCapture(camId)}else if(e.clientX>innerWidth*.42){camId=e.pointerId;lastX=e.clientX;lastY=e.clientY;canvas.setPointerCapture(camId)}});canvas.addEventListener('pointermove',e=>{if(e.pointerId!==camId)return;const dx=e.clientX-lastX,dy=e.clientY-lastY;lastX=e.clientX;lastY=e.clientY;yaw-=dx*.006;pitch=Math.max(-.55,Math.min(.65,pitch-dy*.004));});canvas.addEventListener('pointerup',e=>{if(e.pointerId===camId)camId=null});
+const run=document.getElementById('run');run.addEventListener('pointerdown',()=>run.classList.add('on'));run.addEventListener('pointerup',()=>run.classList.remove('on'));run.addEventListener('pointercancel',()=>run.classList.remove('on'));
+window.addEventListener('keydown',e=>{if(e.key==='Shift')run.classList.add('on');const v=.75;if(e.key==='w'||e.key==='ArrowUp')jy=-v;if(e.key==='s'||e.key==='ArrowDown')jy=v;if(e.key==='a'||e.key==='ArrowLeft')jx=-v;if(e.key==='d'||e.key==='ArrowRight')jx=v});window.addEventListener('keyup',e=>{if(e.key==='Shift')run.classList.remove('on');if(['w','s','a','d','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){jx=0;jy=0;}});
+status.textContent='RUNNING';requestAnimationFrame(render);setInterval(move,16);
+}catch(e){fail(e);}
+})();
+</script>
+</body></html>
